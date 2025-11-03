@@ -4,14 +4,12 @@ plugins {
 
 android {
     namespace = "com.example.facerecognition"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.facerecognition"
         minSdk = 21
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
@@ -27,9 +25,14 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    buildFeatures {
+        viewBinding = true
     }
 }
 
