@@ -69,7 +69,6 @@ public class AdminActivity extends AppCompatActivity {
         cameraExecutor = Executors.newSingleThreadExecutor();
         faceAligner = new FaceAligner();
 
-        // Initialize FaceNet model
         try {
             faceNet = new FaceNet(this, "facenet.tflite");
         } catch (Exception e) {
@@ -182,7 +181,7 @@ public class AdminActivity extends AppCompatActivity {
     private void captureNextPhoto() {
         if (photoCount >= NUM_PHOTOS_TO_CAPTURE) {
             textStatus.setText("All photos captured for: " + currentFacultyName);
-            generateEmbeddings(); // trigger after all photos captured
+            generateEmbeddings();
             return;
         }
 
@@ -239,10 +238,10 @@ public class AdminActivity extends AppCompatActivity {
                             Bitmap alignedFace = faceAligner.alignFace(bitmap);
                             if (alignedFace == null) continue;
 
-                            float[] emb = faceNet.getEmbedding(alignedFace); // generate actual embedding
+                            float[] emb = faceNet.getEmbedding(alignedFace);
                             if (emb == null) continue;
 
-                            normalizeEmbedding(emb); // normalize vector
+                            normalizeEmbedding(emb);
                             photoEmbeddings.add(emb);
                         }
 
@@ -253,7 +252,6 @@ public class AdminActivity extends AppCompatActivity {
                     }
                 }
 
-                // Create the folder for embeddings
                 File embeddingsDir = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "FacultyRecognition");
                 if (!embeddingsDir.exists()) embeddingsDir.mkdirs();
 
@@ -266,7 +264,6 @@ public class AdminActivity extends AppCompatActivity {
                     obj.put(entry.getKey(), arr);
                 }
 
-                // Save JSON with indentation (pretty-print)
                 try (FileOutputStream fos = new FileOutputStream(embeddingsFile)) {
                     fos.write(obj.toString(4).getBytes());
                 }
@@ -274,7 +271,6 @@ public class AdminActivity extends AppCompatActivity {
                 Log.d("AdminActivity", "Embeddings saved at: " + embeddingsFile.getAbsolutePath());
                 Log.d("AdminActivity", "Embeddings JSON:\n" + obj.toString(4));
 
-                // Optional: scan JSON file so it shows in file explorer apps
                 MediaScannerConnection.scanFile(
                         AdminActivity.this,
                         new String[]{embeddingsFile.getAbsolutePath()},

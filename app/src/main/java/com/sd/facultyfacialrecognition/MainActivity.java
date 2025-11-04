@@ -538,13 +538,40 @@ public class MainActivity extends AppCompatActivity {
             }
 
             Log.d(TAG, "Loaded " + KNOWN_FACE_EMBEDDINGS.size() + " embeddings from storage");
-            Log.d(TAG, "Embeddings content: " + obj.toString(4)); // pretty print JSON
+            Log.d(TAG, "Embeddings content: " + obj.toString(4));
 
         } catch (Exception e) {
             Log.e(TAG, "Failed to load embeddings from storage", e);
         }
     }
 
+//    private void loadEmbeddingsFromAssets() {
+//        try {
+//            InputStream is = getAssets().open("embeddings.json");
+//            int size = is.available();
+//            byte[] buffer = new byte[size];
+//            is.read(buffer);
+//            is.close();
+//
+//            String json = new String(buffer, StandardCharsets.UTF_8);
+//            JSONObject obj = new JSONObject(json);
+//
+//            Iterator<String> keys = obj.keys();
+//            while (keys.hasNext()) {
+//                String name = keys.next();
+//                JSONArray arr = obj.getJSONArray(name);
+//                float[] emb = new float[arr.length()];
+//                for (int i = 0; i < arr.length(); i++) emb[i] = (float) arr.getDouble(i);
+//
+//                normalizeEmbedding(emb);
+//                KNOWN_FACE_EMBEDDINGS.put(name, emb);
+//            }
+//
+//            Log.d(TAG, "Loaded " + KNOWN_FACE_EMBEDDINGS.size() + " embeddings from assets");
+//        } catch (Exception e) {
+//            Log.e(TAG, "Failed to load embeddings from assets", e);
+//        }
+//    }
 
     @Override
     protected void onDestroy() {
