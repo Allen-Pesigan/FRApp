@@ -104,12 +104,4 @@ public class LoginActivity extends AppCompatActivity {
             }
         });
     }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        // Auto logout when the activity is destroyed
-        if (mAuth != null) mAuth.signOut();
-        if (mGoogleSignInClient != null) mGoogleSignInClient.signOut();
-    }
 }
