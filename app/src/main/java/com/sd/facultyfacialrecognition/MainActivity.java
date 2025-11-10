@@ -8,6 +8,7 @@ import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.util.Size;
+import android.content.Intent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
@@ -209,44 +210,92 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    public void onLockDoorButtonClicked(View view) {
-
-        if (!isDoorLocked && !isAwaitingLockConfirmation && !isAwaitingLockerRecognition) {
-
-            isAwaitingLockerRecognition = true;
-
-            stableMatchCount = 0;
-            stableMatchName = "Scanning...";
-
-            updateUiOnThread("Awaiting Locker Recognition", "Please hold a faculty face steady for 5 seconds to initiate lock.");
-
-        } else {
-            Log.w(TAG, "Lock button pressed in incorrect state.");
-        }
-    }
-
     public void onConfirmYesClicked(View view) {
         stopConfirmationTimer();
         stopVisualCountdown();
 
         if (isAwaitingLockConfirmation) {
-            isDoorLocked = true;
-            isAwaitingLockConfirmation = false;
-            isAwaitingLockerRecognition = false;
-            lastLockTimestamp = System.currentTimeMillis();
-
-            resetStateAfterAction();
-            updateUiOnThread("System Locked", "Door secured. Cooldown active.");
+            handleLockConfirmation();
 
         } else if (isAwaitingUnlockConfirmation) {
-            isDoorLocked = false;
-            isAwaitingUnlockConfirmation = false;
-            authorizedUnlocker = stableMatchName;
-
-            resetStateAfterAction();
-            updateUiOnThread("Access Granted:\n" + authorizedUnlocker, "Door UNLOCKED. Press 'Lock Door' to secure.");
+            handleUnlockConfirmation();
         }
     }
+
+    private void handleLockConfirmation() {
+        isDoorLocked = true;
+        isAwaitingLockConfirmation = false;
+        isAwaitingLockerRecognition = false;
+        lastLockTimestamp = System.currentTimeMillis();
+
+        resetStateAfterAction();
+        updateUiOnThread("System Locked", "Door secured. Cooldown active.");
+    }
+
+    private void handleUnlockConfirmation() {
+        isDoorLocked = false;
+        isAwaitingUnlockConfirmation = false;
+        authorizedUnlocker = stableMatchName;
+
+        // Stop camera before starting new activity
+        if (cameraExecutor != null) {
+            cameraExecutor.shutdown();
+        }
+
+        // Check if rescan mode
+        boolean isRescanMode = getIntent().hasExtra("mode") &&
+                "rescan".equals(getIntent().getStringExtra("mode"));
+
+        if (isRescanMode) {
+            // Show break/end buttons, hide confirmation buttons
+            runOnUiThread(() -> {
+                findViewById(R.id.btn_take_break).setVisibility(View.VISIBLE);
+                findViewById(R.id.btn_end_class).setVisibility(View.VISIBLE);
+                findViewById(R.id.confirm_yes_button).setVisibility(View.GONE);
+                findViewById(R.id.confirm_no_button).setVisibility(View.GONE);
+                findViewById(R.id.lock_door_button).setVisibility(View.GONE);
+
+                updateUiOnThread("What would you like to do?", "Select an option below.");
+            });
+
+            resetStateAfterAction(); // Ensure state reset even in rescan mode
+            return;
+        }
+
+        // Normal unlock flow: go to dashboard
+        Intent intent = new Intent(MainActivity.this, DashboardActivity.class);
+        intent.putExtra("profName", authorizedUnlocker);
+        startActivity(intent);
+
+        resetStateAfterAction();
+        updateUiOnThread("Access Granted:\n" + authorizedUnlocker,
+                "Door UNLOCKED. Press 'Lock Door' to secure.");
+    }
+
+    public void onTakeBreakClicked(View view) {
+        // Go to dashboard with break status
+        Intent intent = new Intent(MainActivity.this, DashboardActivity.class);
+        intent.putExtra("profName", authorizedUnlocker);
+        intent.putExtra("status", "Professor is on break. Please scan to resume class.");
+        startActivity(intent);
+        finish();
+    }
+
+    public void onBackInClassScanned() {
+        stableMatchCount = 0;
+        authorizedUnlocker = null;
+        stableMatchName = "Scanning...";
+        currentBestMatch = "Scanning...";
+        updateUiOnThread("Professor Back in Class", "Please scan to confirm identity.");
+    }
+
+    public void onEndClassClicked(View view) {
+        Intent intent = new Intent(MainActivity.this, ThankYouActivity.class);
+        intent.putExtra("message", "Class ended and door is locked, thank you!");
+        startActivity(intent);
+        finish();
+    }
+
 
     public void onConfirmNoClicked(View view) {
         stopConfirmationTimer();
@@ -507,15 +556,9 @@ public class MainActivity extends AppCompatActivity {
             countdownTextView.setText(countdown);
 
             if (isAwaitingLockConfirmation || isAwaitingUnlockConfirmation) {
-                lockButton.setVisibility(View.GONE);
                 confirmYesButton.setVisibility(View.VISIBLE);
                 confirmNoButton.setVisibility(View.VISIBLE);
-            } else if (!isDoorLocked && !isAwaitingLockerRecognition) {
-                lockButton.setVisibility(View.VISIBLE);
-                confirmYesButton.setVisibility(View.GONE);
-                confirmNoButton.setVisibility(View.GONE);
             } else {
-                lockButton.setVisibility(View.GONE);
                 confirmYesButton.setVisibility(View.GONE);
                 confirmNoButton.setVisibility(View.GONE);
             }
