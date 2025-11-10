@@ -10,6 +10,7 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
+
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
@@ -17,7 +18,9 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
     }
+
 }
 
-rootProject.name = "Face Recognition"
+rootProject.name = "Faculty Facial Recognition"
 include(":app")
+ 

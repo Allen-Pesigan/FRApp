@@ -3,13 +3,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.facerecognition"
-    compileSdk = 36
+    namespace = "com.sd.facultyfacialrecognition"
+    compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.facerecognition"
-        minSdk = 21
-        targetSdk = 34
+        applicationId = "com.sd.facultyfacialrecognition"
+        minSdk = 26
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -25,18 +25,27 @@ android {
             )
         }
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-
-    buildFeatures {
-        viewBinding = true
-    }
 }
 
 dependencies {
+
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+
+    implementation("androidx.camera:camera-core:1.3.1")
+    implementation("androidx.camera:camera-camera2:1.1.3.1")
+    implementation("androidx.camera:camera-lifecycle:1.3.1")
+    implementation("androidx.camera:camera-view:1.3.1")
+
+    implementation("com.google.mlkit:face-detection:16.1.5")
+    implementation("com.google.code.gson:gson:2.10.1")
+
+
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.activity)
