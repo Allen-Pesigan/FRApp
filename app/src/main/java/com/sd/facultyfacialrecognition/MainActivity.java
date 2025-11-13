@@ -41,6 +41,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -81,7 +82,9 @@ public class MainActivity extends AppCompatActivity {
     private ExecutorService cameraExecutor;
 
     private final Map<String, float[]> KNOWN_FACE_EMBEDDINGS = new HashMap<>();
-    private float dynamicThreshold = 1.2f;
+    private Map<String, List<float[]>> facultyEmbeddings = new HashMap<>();
+
+    private float dynamicThreshold = 0.8f;
 
     private static final int STABILITY_FRAMES_NEEDED = 20;
     private static final long UNLOCK_COOLDOWN_MILLIS = 10000;
@@ -138,6 +141,7 @@ public class MainActivity extends AppCompatActivity {
 
         initializeSystem();
         startCamera();
+        testLoadEmbeddings();
 
         db = FirebaseFirestore.getInstance();
 
@@ -147,18 +151,21 @@ public class MainActivity extends AppCompatActivity {
         try {
             faceNet = new FaceNet(this, "facenet.tflite");
 
+            // Try loading from storage first
             boolean embeddingsLoaded = loadEmbeddingsFromStorage();
             if (!embeddingsLoaded) {
+                // Fallback to assets
                 embeddingsLoaded = loadEmbeddingsFromAssets();
             }
 
-            Log.d(TAG, "FaceNet model and embeddings loaded successfully");
+            Log.d(TAG, "FaceNet model and embeddings loaded successfully. Embeddings loaded: " + embeddingsLoaded);
         } catch (Exception e) {
             Log.e(TAG, "Error initializing FaceNet or embeddings", e);
         }
 
         startCamera();
     }
+
 
 
     private void startConfirmationTimer(boolean isLock) {
@@ -775,58 +782,99 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean loadEmbeddingsFromStorage() {
-        try {
-            File embeddingsFile = new File(
-                    getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                    "FacultyRecognition/embeddings.json"
-            );
-
-            if (!embeddingsFile.exists()) {
-                Log.w(TAG, "Embeddings file not found.");
-                return false;
-            }
-
-            FileInputStream fis = new FileInputStream(embeddingsFile);
-            String json = readStreamToString(fis);
-            fis.close();
-
-            Map<String, float[]> loaded = new Gson().fromJson(
-                    json,
-                    new TypeToken<Map<String, float[]>>() {}.getType()
-            );
-
-            KNOWN_FACE_EMBEDDINGS.clear();
-            KNOWN_FACE_EMBEDDINGS.putAll(loaded);
-
-            Log.i(TAG, "Loaded " + KNOWN_FACE_EMBEDDINGS.size() + " embeddings.");
-            return true;
-
-        } catch (Exception e) {
-            Log.e(TAG, "Error loading embeddings from storage", e);
-            return false;
-        }
-    }
-
     private boolean loadEmbeddingsFromAssets() {
         try {
             InputStream is = getAssets().open("embeddings.json");
             String json = readStreamToString(is);
             is.close();
 
-            Map<String, float[]> loaded = new Gson().fromJson(
+            // Parse JSON as Map<String, List<List<Double>>> first
+            Map<String, List<List<Double>>> temp = new Gson().fromJson(
                     json,
-                    new TypeToken<Map<String, float[]>>() {}.getType()
+                    new TypeToken<Map<String, List<List<Double>>>>() {}.getType()
             );
 
             KNOWN_FACE_EMBEDDINGS.clear();
-            KNOWN_FACE_EMBEDDINGS.putAll(loaded);
 
-            Log.i(TAG, "Loaded embeddings from assets: " + KNOWN_FACE_EMBEDDINGS.size());
+            for (Map.Entry<String, List<List<Double>>> entry : temp.entrySet()) {
+                String name = entry.getKey();
+                List<List<Double>> embeddingsList = entry.getValue();
+
+                List<Double> firstEmb = embeddingsList.get(0);
+                float[] embArr = new float[firstEmb.size()];
+                for (int j = 0; j < firstEmb.size(); j++) {
+                    embArr[j] = firstEmb.get(j).floatValue();
+                }
+                KNOWN_FACE_EMBEDDINGS.put(name, embArr);
+            }
+
+            Log.i(TAG, "✅ Loaded embeddings from assets: " + KNOWN_FACE_EMBEDDINGS.size());
             return true;
 
         } catch (Exception e) {
             Log.e(TAG, "Error loading embeddings from assets", e);
+            return false;
+        }
+    }
+
+
+    private boolean loadEmbeddingsFromStorage() {
+        try {
+            File embeddingsFile = new File(getExternalFilesDir("Pictures/FacultyPhotos"), "embeddings.json");
+            if (!embeddingsFile.exists()) {
+                Log.d(TAG, "Embeddings file does not exist");
+                return false;
+            }
+
+            String jsonStr = new String(Files.readAllBytes(embeddingsFile.toPath()), StandardCharsets.UTF_8);
+            JSONObject jsonObj = new JSONObject(jsonStr);
+
+            facultyEmbeddings.clear();
+            KNOWN_FACE_EMBEDDINGS.clear();
+
+            Iterator<String> keys = jsonObj.keys();
+            while (keys.hasNext()) {
+                String facultyName = keys.next();
+                JSONArray embeddingsArray = jsonObj.getJSONArray(facultyName);
+
+                if (embeddingsArray.length() == 0) continue;
+
+                // Store all embeddings in facultyEmbeddings
+                List<float[]> allEmbeddings = new ArrayList<>();
+                for (int i = 0; i < embeddingsArray.length(); i++) {
+                    JSONArray arr = embeddingsArray.getJSONArray(i);
+                    float[] emb = new float[arr.length()];
+                    for (int j = 0; j < arr.length(); j++) {
+                        emb[j] = (float) arr.getDouble(j);
+                    }
+                    allEmbeddings.add(emb);
+                }
+                facultyEmbeddings.put(facultyName, allEmbeddings);
+
+                // Compute the average embedding for KNOWN_FACE_EMBEDDINGS
+                int embSize = allEmbeddings.get(0).length;
+                float[] avgEmb = new float[embSize];
+                for (float[] emb : allEmbeddings) {
+                    for (int j = 0; j < embSize; j++) {
+                        avgEmb[j] += emb[j];
+                    }
+                }
+                for (int j = 0; j < embSize; j++) {
+                    avgEmb[j] /= allEmbeddings.size();
+                }
+
+                // Put only one key per person
+                KNOWN_FACE_EMBEDDINGS.put(facultyName, avgEmb);
+            }
+
+            Log.d(TAG, "✅ Embeddings loaded successfully from storage.");
+            Log.d(TAG, "Faculties loaded: " + facultyEmbeddings.keySet().size());
+            Log.d(TAG, "KNOWN_FACE_EMBEDDINGS loaded: " + KNOWN_FACE_EMBEDDINGS.size());
+
+            return true;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to load embeddings from storage", e);
             return false;
         }
     }
@@ -933,6 +981,52 @@ public class MainActivity extends AppCompatActivity {
         float accuracy = (float) correctMatches / totalComparisons * 100f;
         Log.d("ModelAccuracy", String.format("Recognition Accuracy: %.2f%% (Threshold = %.3f)", accuracy, dynamicThreshold));
     }
+
+    private void testLoadEmbeddings() {
+        try {
+            File embeddingsFile = new File(
+                    getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                    "FacultyPhotos/embeddings.json"
+            );
+
+            Log.d(TAG, "Embeddings file exists: " + embeddingsFile.exists());
+            Log.d(TAG, "Embeddings file path: " + embeddingsFile.getAbsolutePath());
+
+            if (!embeddingsFile.exists()) return;
+
+            FileInputStream fis = new FileInputStream(embeddingsFile);
+            String json = readStreamToString(fis);
+            fis.close();
+
+            Log.d(TAG, "JSON content snippet: " + json.substring(0, Math.min(json.length(), 200)) + "...");
+
+            // Try parsing as Map<String, List<List<Double>>>
+            Map<String, List<List<Double>>> temp = new Gson().fromJson(
+                    json,
+                    new TypeToken<Map<String, List<List<Double>>>>(){}.getType()
+            );
+
+            if (temp == null || temp.isEmpty()) {
+                Log.e(TAG, "Parsed JSON is null or empty!");
+                return;
+            }
+
+            for (Map.Entry<String, List<List<Double>>> entry : temp.entrySet()) {
+                String name = entry.getKey();
+                List<List<Double>> embeddingsList = entry.getValue();
+                Log.d(TAG, "Person: " + name + " | # of embeddings: " + embeddingsList.size());
+
+                if (!embeddingsList.isEmpty()) {
+                    List<Double> firstEmb = embeddingsList.get(0);
+                    Log.d(TAG, "First embedding sample: " + firstEmb.subList(0, Math.min(firstEmb.size(), 10)));
+                }
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error testing embeddings load", e);
+        }
+    }
+
 
     @Override
     protected void onDestroy() {
