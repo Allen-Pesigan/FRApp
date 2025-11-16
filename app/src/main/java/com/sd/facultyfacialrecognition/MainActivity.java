@@ -607,8 +607,10 @@ public class MainActivity extends AppCompatActivity {
         float bestDist = Float.MAX_VALUE;
 
         if (faces.isEmpty() || faces.size() > 1) {
+            // No single face detected, don't calculate accuracy or log anything
             currentBestFrameMatch = "Scanning...";
         } else {
+            // Single face detected — proceed with embedding, ranking, and logging
             Face face = faces.get(0);
             android.graphics.PointF leftEye = face.getLandmark(FaceLandmark.LEFT_EYE) != null ? face.getLandmark(FaceLandmark.LEFT_EYE).getPosition() : null;
             android.graphics.PointF rightEye = face.getLandmark(FaceLandmark.RIGHT_EYE) != null ? face.getLandmark(FaceLandmark.RIGHT_EYE).getPosition() : null;
@@ -620,31 +622,59 @@ public class MainActivity extends AppCompatActivity {
                 if (emb != null) {
                     normalizeEmbedding(emb);
 
+                    float maxDistance = 10f;
+                    int rank = 1;
+                    Map<String, Float> rankedMatches = new HashMap<>();
+
                     for (Map.Entry<String, float[]> entry : KNOWN_FACE_EMBEDDINGS.entrySet()) {
-                        float d = FaceNet.distance(emb, entry.getValue());
-                        Log.d("FaceRecognition", "Comparing with: " + entry.getKey() + " | Distance = " + d);
-                        if (d < bestDist) {
-                            bestDist = d;
-                            currentBestFrameMatch = entry.getKey();
-                        }
+                        float distance = FaceNet.distance(emb, entry.getValue());
+                        float accuracy = 1f - (distance / maxDistance);
+                        rankedMatches.put(entry.getKey(), accuracy);
                     }
 
-                    Log.d("FaceRecognition", "Best match this frame: " + currentBestFrameMatch + " | Best Distance = " + bestDist);
-                    Log.d("FaceRecognition", "Using threshold = " + dynamicThreshold);
+                    // Sort matches by descending accuracy
+                    List<Map.Entry<String, Float>> sortedList = new ArrayList<>(rankedMatches.entrySet());
+                    sortedList.sort((a, b) -> Float.compare(b.getValue(), a.getValue()));
 
-                    if (bestDist > dynamicThreshold) {
-                        currentBestFrameMatch = "Unknown";
+                    // Log only if there’s a valid match
+                    Log.d("FaceRecognitionRanking", "===== Ranking of Matches =====");
+                    for (Map.Entry<String, Float> match : sortedList) {
+                        Log.d("FaceRecognitionRanking", String.format("%d. %s : %.4f",
+                                rank++, match.getKey(), match.getValue()));
                     }
+
+                    Map.Entry<String, Float> bestMatch = sortedList.get(0);
+                    Log.d("FaceRecognition", String.format("Best match this frame: %s | Accuracy = %.4f",
+                            bestMatch.getKey(), bestMatch.getValue()));
+
+                    currentBestFrameMatch = bestMatch.getKey();
+
+                    String finalMessage = "";
+                    String countdownMessage = "";
+
+                    // --- BLOCK ACCESS IF UNKNOWN DETECTED ---
+                    if ("Unknown".equals(currentBestFrameMatch)) {
+                        finalMessage = "Access Denied";
+                        countdownMessage = "Unknown face detected. Recognition failed.";
+                        stableMatchCount = 0;
+                        stableMatchName = "Scanning...";
+                        updateUiOnThread(finalMessage, countdownMessage);
+                        runOnUiThread(() -> overlayView.setFaces(graphics));
+                        return;
+                    }
+
 
                 }
+
             }
+
             graphics.add(new FaceOverlayView.FaceGraphic(face.getBoundingBox(), "", bestDist));
         }
 
-        this.currentBestMatch = currentBestFrameMatch;
-
         String finalMessage = "";
         String countdownMessage = "";
+
+        this.currentBestMatch = currentBestFrameMatch;
 
         if (isAwaitingLockConfirmation || isAwaitingUnlockConfirmation) {
 

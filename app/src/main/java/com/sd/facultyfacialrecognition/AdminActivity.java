@@ -47,8 +47,22 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import android.app.ProgressDialog;
+import android.graphics.drawable.BitmapDrawable;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
+import android.widget.LinearLayout;
+import android.os.Handler;
+import android.os.Looper;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
 public class AdminActivity extends AppCompatActivity {
 
+    private ProgressDialog progressDialog;
+    private Handler mainHandler = new Handler(Looper.getMainLooper());
     private static final int REQUEST_CODE_SIGN_IN = 2001;
     private static final int REQUEST_CODE_PICK_IMAGES = 3001;
     private static final int NUM_PHOTOS_TO_CAPTURE = 10;
@@ -401,32 +415,217 @@ public class AdminActivity extends AppCompatActivity {
         File facultyDir = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "FacultyPhotos/" + currentFacultyName);
         if (!facultyDir.exists()) facultyDir.mkdirs();
 
-        try {
-            int imported = 0;
+        // Collect URIs
+        final List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int i = 0; i < data.getClipData().getItemCount(); i++)
+                uris.add(data.getClipData().getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
 
-            if (data.getClipData() != null) {
-                for (int i = 0; i < data.getClipData().getItemCount(); i++) {
-                    Uri uri = data.getClipData().getItemAt(i).getUri();
-                    copyUriToFile(uri, facultyDir, ++imported);
+        if (uris.isEmpty()) {
+            textStatus.setText("No images selected.");
+            return;
+        }
+
+        // Show indeterminate progress initially, then update
+        progressDialog = new ProgressDialog(this);
+        progressDialog.setTitle("Importing photos");
+        progressDialog.setMessage("Preparing...");
+        progressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+        progressDialog.setMax(uris.size());
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+
+        final AtomicInteger importedCount = new AtomicInteger(0);
+        final AtomicInteger skippedCount = new AtomicInteger(0);
+
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+
+        exec.execute(() -> {
+            int counter = 0;
+            for (Uri uri : uris) {
+                final int indexForName = ++counter;
+
+                // load -> correct rotation -> detect faces (possibly multiple) -> preview -> save
+                Bitmap original = ImageProcessing.loadBitmapFromUri(this, uri);
+                if (original == null) {
+                    skippedCount.incrementAndGet();
+                    updateProgressOnUI(progressDialog, counter, importedCount.get(), skippedCount.get());
+                    continue;
                 }
-            } else if (data.getData() != null) {
-                copyUriToFile(data.getData(), facultyDir, 1);
-                imported = 1;
+
+                original = ImageProcessing.rotateBitmapIfRequired(this, uri, original);
+
+                // detect faces:
+                List<Bitmap> faces = detectFacesFallback(original);
+
+                if (faces == null || faces.size() == 0) {
+                    // fallback: try single-face alignFace
+                    Bitmap single = faceAligner.alignFace(original);
+                    if (single != null) faces = new ArrayList<>();
+                    if (single != null) faces.add(single);
+                }
+
+                if (faces == null || faces.size() == 0) {
+                    skippedCount.incrementAndGet();
+                    updateProgressOnUI(progressDialog, counter, importedCount.get(), skippedCount.get());
+                    continue;
+                }
+
+                // If multiple faces -> ask user which to save (on UI thread)
+                Bitmap chosenFace = null;
+                if (faces.size() == 1) {
+                    chosenFace = faces.get(0);
+                } else {
+                    // ask user to pick one (blocking until selection)
+                    chosenFace = promptUserToSelectFace(faces);
+                    if (chosenFace == null) {
+                        skippedCount.incrementAndGet();
+                        updateProgressOnUI(progressDialog, counter, importedCount.get(), skippedCount.get());
+                        continue;
+                    }
+                }
+
+                // blur detection
+                if (ImageProcessing.isBlurry(chosenFace)) {
+                    // skip blurry
+                    skippedCount.incrementAndGet();
+                    updateProgressOnUI(progressDialog, counter, importedCount.get(), skippedCount.get());
+                    continue;
+                }
+
+                // resize to FaceNet expected size
+                Bitmap resized = ImageProcessing.resize(chosenFace, 160, 160);
+
+                // Save file
+                try {
+                    File outFile = new File(facultyDir, "photo_" + (importedCount.get() + 1) + ".jpg");
+                    FileOutputStream fos = new FileOutputStream(outFile);
+                    resized.compress(Bitmap.CompressFormat.JPEG, 100, fos);
+                    fos.close();
+                    importedCount.incrementAndGet();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    skippedCount.incrementAndGet();
+                }
+
+                updateProgressOnUI(progressDialog, counter, importedCount.get(), skippedCount.get());
             }
 
-            int finalImported = imported;
-            runOnUiThread(() -> {
-                textStatus.setText("Imported " + finalImported + " photo(s)! Press 'Update Dataset' to continue.");
-                Toast.makeText(this, "Photos ready.", Toast.LENGTH_SHORT).show();
+            // finished
+            mainHandler.post(() -> {
+                progressDialog.dismiss();
+                textStatus.setText("Imported: " + importedCount.get() + " | Skipped: " + skippedCount.get() + ". Press 'Update Dataset'.");
+                Toast.makeText(this, "Imported " + importedCount.get() + ". Skipped " + skippedCount.get(), Toast.LENGTH_LONG).show();
+                if (googleSignInClient != null) googleSignInClient.signOut();
             });
 
-            if (googleSignInClient != null) googleSignInClient.signOut();
+            exec.shutdown();
+        });
+    }
 
+    // Shows a dialog with images and returns the chosen Bitmap (or null if user cancels).
+    private Bitmap promptUserToSelectFace(List<Bitmap> faces) {
+        final Object lock = new Object();
+        final Bitmap[] result = new Bitmap[1];
+
+        mainHandler.post(() -> {
+            AlertDialog.Builder b = new AlertDialog.Builder(AdminActivity.this);
+            b.setTitle("Select the correct face");
+
+            // create horizontal scroll of images
+            LinearLayout layout = new LinearLayout(AdminActivity.this);
+            layout.setOrientation(LinearLayout.HORIZONTAL);
+            layout.setPadding(16, 16, 16, 16);
+            for (int i = 0; i < faces.size(); i++) {
+                final int idx = i;
+                ImageView iv = new ImageView(AdminActivity.this);
+                iv.setImageDrawable(new BitmapDrawable(getResources(), faces.get(i)));
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(300, 300);
+                p.setMargins(12, 0, 12, 0);
+                iv.setLayoutParams(p);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                iv.setOnClickListener(v -> {
+                    synchronized (lock) {
+                        result[0] = faces.get(idx);
+                        lock.notify();
+                    }
+                });
+                layout.addView(iv);
+            }
+
+            b.setView(layout);
+            b.setNegativeButton("Skip", (d, w) -> {
+                synchronized (lock) {
+                    result[0] = null;
+                    lock.notify();
+                }
+            });
+
+            AlertDialog dialog = b.create();
+            dialog.setCancelable(false);
+            dialog.show();
+        });
+
+        // wait for user selection
+        try {
+            synchronized (lock) {
+                lock.wait(); // will be notified when user picks or skips
+            }
+        } catch (InterruptedException e) {
+            return null;
+        }
+
+        return result[0];
+    }
+
+    private List<Bitmap> detectFacesFallback(Bitmap original) {
+        try {
+            // Try to call detectFaces if FaceAligner supports it
+            List<Bitmap> faces = faceAligner.detectFaces(original); // OPTIONAL method in your FaceAligner
+            if (faces != null && faces.size() > 0) return faces;
+        } catch (Exception ignored) { }
+
+        // fallback: try to use android.media.FaceDetector (very simple; prefers RGB_565)
+        try {
+            Bitmap rgb = original.copy(Bitmap.Config.RGB_565, true);
+            int maxFaces = 5;
+            android.media.FaceDetector.Face[] fArray = new android.media.FaceDetector.Face[maxFaces];
+            android.media.FaceDetector fd = new android.media.FaceDetector(rgb.getWidth(), rgb.getHeight(), maxFaces);
+            int found = fd.findFaces(rgb, fArray);
+            List<Bitmap> out = new ArrayList<>();
+            for (int i = 0; i < found; i++) {
+                android.media.FaceDetector.Face f = fArray[i];
+                if (f == null) continue;
+                android.graphics.PointF mid = new android.graphics.PointF();
+                f.getMidPoint(mid);
+                float eyesDist = f.eyesDistance();
+                int left = (int) Math.max(0, mid.x - eyesDist * 2);
+                int top = (int) Math.max(0, mid.y - eyesDist * 2);
+                int right = (int) Math.min(rgb.getWidth(), mid.x + eyesDist * 2);
+                int bottom = (int) Math.min(rgb.getHeight(), mid.y + eyesDist * 2);
+                if (right - left <= 20 || bottom - top <= 20) continue;
+                Bitmap faceCrop = Bitmap.createBitmap(original, left, top, right - left, bottom - top);
+                out.add(faceCrop);
+            }
+            return out;
         } catch (Exception e) {
-            e.printStackTrace();
-            textStatus.setText("Import failed: " + e.getMessage());
+            return null;
         }
     }
+
+
+    private void updateProgressOnUI(ProgressDialog pd, int processed, int imported, int skipped) {
+        mainHandler.post(() -> {
+            if (pd != null && pd.isShowing()) {
+                pd.setProgress(processed);
+                pd.setMessage("Processed " + processed + " | Imported: " + imported + " | Skipped: " + skipped);
+            }
+        });
+    }
+
 
     private void copyUriToFile(Uri uri, File facultyDir, int count) throws Exception {
         InputStream inputStream = getContentResolver().openInputStream(uri);
@@ -446,7 +645,11 @@ public class AdminActivity extends AppCompatActivity {
         textStatus.setText("Generating embeddings...");
         new Thread(() -> {
             try {
-                File facultyRoot = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "FacultyPhotos");
+                File facultyRoot = new File(
+                        getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                        "FacultyPhotos"
+                );
+
                 File[] facultyDirs = facultyRoot.listFiles(File::isDirectory);
                 if (facultyDirs == null || facultyDirs.length == 0) {
                     runOnUiThread(() -> textStatus.setText("No faculty found to generate embeddings."));
@@ -461,19 +664,60 @@ public class AdminActivity extends AppCompatActivity {
                     if (photos == null || photos.length == 0) continue;
 
                     List<float[]> embeddingsList = new ArrayList<>();
+
                     for (File photo : photos) {
-                        Bitmap bitmap = BitmapFactory.decodeFile(photo.getAbsolutePath());
-                        if (bitmap == null) continue;
+                        Bitmap original = BitmapFactory.decodeFile(photo.getAbsolutePath());
+                        if (original == null) continue;
 
-                        Bitmap faceBitmap = faceAligner.alignFace(bitmap);
-                        if (faceBitmap == null) continue;
+                        // --- 1. CROP IMAGE FIRST ---
+                        Bitmap croppedFace = faceAligner.alignFace(original);
 
-                        float[] emb = faceNet.getEmbedding(faceBitmap);
-                        if (emb != null) embeddingsList.add(emb);
+                        if (croppedFace == null) {
+                            Log.w("Embedding", "No face found in: " + photo.getName());
+                            continue;
+                        }
+
+                        // --- 2. SAVE CROPPED FACE BACK TO SAME FILE ---
+                        try (FileOutputStream out = new FileOutputStream(photo)) {
+                            croppedFace.compress(Bitmap.CompressFormat.JPEG, 100, out);
+                        }
+
+                        // --- 3. EMBEDDING FROM CROPPED FACE ---
+                        float[] emb = faceNet.getEmbedding(croppedFace);
+                        if (emb != null) {
+                            embeddingsList.add(emb);
+                        }
                     }
+
                     allEmbeddings.put(facultyName, embeddingsList);
                 }
 
+                // --- ADD MULTIPLE UNKNOWN EMBEDDINGS ---
+                int embeddingSize = 128; // same as FaceNet output size
+                int unknownCount = 5;    // number of unknown embeddings
+                Random random = new Random(42); // fixed seed for reproducibility
+                List<float[]> unknownEmbeddings = new ArrayList<>();
+
+                for (int j = 0; j < unknownCount; j++) {
+                    float[] unknownEmbedding = new float[embeddingSize];
+                    for (int i = 0; i < embeddingSize; i++) {
+                        unknownEmbedding[i] = (random.nextFloat() - 0.5f) * 0.05f; // range roughly -0.025 to +0.025
+                    }
+
+                    // Normalize embedding to unit vector like FaceNet outputs
+                    float norm = 0f;
+                    for (float v : unknownEmbedding) norm += v * v;
+                    norm = (float) Math.sqrt(norm);
+                    for (int i = 0; i < embeddingSize; i++) unknownEmbedding[i] /= norm;
+
+                    unknownEmbeddings.add(unknownEmbedding);
+                }
+
+                allEmbeddings.put("Unknown", unknownEmbeddings);
+
+
+
+                // Save embeddings.json
                 File embeddingsFile = new File(facultyRoot, "embeddings.json");
                 Gson gson = new Gson();
                 try (FileWriter writer = new FileWriter(embeddingsFile)) {
@@ -487,10 +731,13 @@ public class AdminActivity extends AppCompatActivity {
 
             } catch (Exception e) {
                 e.printStackTrace();
-                runOnUiThread(() -> textStatus.setText("Error generating embeddings: " + e.getMessage()));
+                runOnUiThread(() ->
+                        textStatus.setText("Error generating embeddings: " + e.getMessage())
+                );
             }
         }).start();
     }
+
 
     @Override
     protected void onDestroy() {

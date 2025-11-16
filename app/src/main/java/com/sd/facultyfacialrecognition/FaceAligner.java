@@ -14,6 +14,7 @@ import com.google.mlkit.vision.face.FaceDetection;
 import com.google.mlkit.vision.face.FaceDetector;
 import com.google.mlkit.vision.face.FaceDetectorOptions;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -70,6 +71,35 @@ public class FaceAligner {
             return null;
         }
     }
+
+    public List<Bitmap> detectFaces(Bitmap bitmap) {
+        List<Bitmap> faceList = new ArrayList<>();
+
+        try {
+            InputImage image = InputImage.fromBitmap(bitmap, 0);
+            List<Face> faces = Tasks.await(detector.process(image));
+
+            for (Face f : faces) {
+                Rect b = f.getBoundingBox();
+
+                int left = Math.max(b.left, 0);
+                int top = Math.max(b.top, 0);
+                int width = Math.min(b.width(), bitmap.getWidth() - left);
+                int height = Math.min(b.height(), bitmap.getHeight() - top);
+
+                Bitmap crop = Bitmap.createBitmap(bitmap, left, top, width, height);
+
+                // Resize each face to 160x160 (FaceNet size)
+                faceList.add(Bitmap.createScaledBitmap(crop, 160, 160, true));
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return faceList;
+    }
+
 
     /**
      * Close the detector when done.
