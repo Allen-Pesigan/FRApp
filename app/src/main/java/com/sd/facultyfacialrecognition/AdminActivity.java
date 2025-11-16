@@ -694,7 +694,7 @@ public class AdminActivity extends AppCompatActivity {
 
                 // --- ADD MULTIPLE UNKNOWN EMBEDDINGS ---
                 int embeddingSize = 128; // same as FaceNet output size
-                int unknownCount = 5;    // number of unknown embeddings
+                int unknownCount = 10;    // number of unknown embeddings
                 Random random = new Random(42); // fixed seed for reproducibility
                 List<float[]> unknownEmbeddings = new ArrayList<>();
 
